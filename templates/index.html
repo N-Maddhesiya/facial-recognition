@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Face Recognition</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: sans-serif;
+      background: #111;
+      color: #eee;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 20px;
+      gap: 14px;
+    }
+    h1 { font-size: 1.4rem; font-weight: 500; }
+    .canvas-wrap {
+      position: relative;
+      border: 2px solid #333;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    video { display: block; }
+    canvas {
+      position: absolute;
+      top: 0; left: 0;
+    }
+    #status {
+      font-size: 0.85rem;
+      color: #aaa;
+    }
+    .controls { display: flex; gap: 10px; }
+    button {
+      padding: 8px 18px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      background: #2563eb;
+      color: white;
+    }
+    button:hover { background: #1d4ed8; }
+    button.stop { background: #dc2626; }
+    button.stop:hover { background: #b91c1c; }
+  </style>
+</head>
+<body>
+  <h1>Multi-Person Face Recognition</h1>
+
+  <div class="canvas-wrap">
+    <video id="video" width="640" height="480" autoplay muted playsinline></video>
+    <canvas id="overlay" width="640" height="480"></canvas>
+  </div>
+
+  <div class="controls">
+    <button id="startBtn" onclick="startCamera()">Start Camera</button>
+    <button id="stopBtn" class="stop" onclick="stopRecognition()" style="display:none">Stop</button>
+  </div>
+
+  <p id="status">Click "Start Camera" to begin.</p>
+
+  <script>
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("overlay");
+    const ctx = canvas.getContext("2d");
+    const status = document.getElementById("status");
+
+    let intervalId = null;
+    let stream = null;
+
+    async function startCamera() {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        video.srcObject = stream;
+        document.getElementById("startBtn").style.display = "none";
+        document.getElementById("stopBtn").style.display = "inline-block";
+        status.textContent = "Camera active — recognizing faces...";
+        intervalId = setInterval(captureAndRecognize, 800); // every 800ms
+      } catch (err) {
+        status.textContent = "Camera error: " + err.message;
+      }
+    }
+
+    function stopRecognition() {
+      clearInterval(intervalId);
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      document.getElementById("startBtn").style.display = "inline-block";
+      document.getElementById("stopBtn").style.display = "none";
+      status.textContent = "Stopped.";
+    }
+
+    async function captureAndRecognize() {
+      // Draw current video frame to a hidden canvas to get base64
+      const tempCanvas = document.createElement("canvas");
+      tempCanvas.width = 320;  // smaller = faster
+      tempCanvas.height = 240;
+      const tc = tempCanvas.getContext("2d");
+      tc.drawImage(video, 0, 0, 320, 240);
+      const imageData = tempCanvas.toDataURL("image/jpeg", 0.7);
+
+      try {
+        const res = await fetch("/recognize", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ image: imageData })
+        });
+
+        const data = await res.json();
+        drawResults(data.faces || []);
+
+        if (data.faces && data.faces.length > 0) {
+          const names = data.faces.map(f =>
+            f.name === "Unknown" ? "Unknown" : `${f.name} (${f.confidence}%)`
+          );
+          status.textContent = "Detected: " + names.join(", ");
+        } else {
+          status.textContent = "No faces detected.";
+        }
+
+      } catch (err) {
+        status.textContent = "Error: " + err.message;
+      }
+    }
+
+    function drawResults(faces) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Scale factor (video is 640x480, we sent 320x240)
+      const scaleX = canvas.width / 320;
+      const scaleY = canvas.height / 240;
+
+      faces.forEach(face => {
+        const { top, right, bottom, left } = face.box;
+        const x = left * scaleX;
+        const y = top * scaleY;
+        const w = (right - left) * scaleX;
+        const h = (bottom - top) * scaleY;
+
+        const isKnown = face.name !== "Unknown";
+        const color = isKnown ? "#22c55e" : "#ef4444";
+
+        // Draw box
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x, y, w, h);
+
+        // Draw label background
+        const label = isKnown ? `${face.name} ${face.confidence}%` : "Unknown";
+        ctx.font = "bold 14px sans-serif";
+        const textW = ctx.measureText(label).width + 8;
+        ctx.fillStyle = color;
+        ctx.fillRect(x, y - 22, textW, 20);
+
+        // Draw label text
+        ctx.fillStyle = "#fff";
+        ctx.fillText(label, x + 4, y - 6);
+      });
+    }
+  </script>
+</body>
+</html>
